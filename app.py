@@ -883,4 +883,4 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
     return JSONResponse(content={"streams": todos_streams})
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
