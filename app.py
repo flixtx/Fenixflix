@@ -1,6 +1,6 @@
 import uvloop
 import asyncio
-# Troca o motor do asyncio antes de qualquer outra coisa
+
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -333,9 +333,12 @@ async def build_recent_catalog():
 
     items = all_data if isinstance(all_data, list) else list(all_data.values())
     movie_ids, series_ids = [], []
-    for data in items:
-        if len(movie_ids) >= 27 and len(series_ids) >= 27:
+    for item in items:
+        if len(movie_ids) >= 30 and len(series_ids) >= 30:
             break
+        data = item.get("conteudo") if isinstance(item, dict) and "conteudo" in item else item
+        if not isinstance(data, dict):
+            continue
         imdb_id = data.get("id")
         if not imdb_id:
             continue
@@ -473,7 +476,7 @@ async def get_populares_fenix_cached(content_type: str):
         except:
             pass
 
-    url = f"{SERVE_}/api/vistos" if SERVE_ else "https://fenixflix-2ymu.onrender.com/api/vistos"
+    url = f"{SERVE_}/api/vistos"
     try:
         resp = await _http_client.get(url, timeout=15.0)
         vistos = resp.json() if resp.status_code == 200 else []
@@ -493,25 +496,25 @@ async def get_populares_fenix_cached(content_type: str):
     # Ordenar por visualizações de forma decrescente
     vistos = sorted(vistos, key=lambda x: x.get("v", 0), reverse=True)
     scraper_cache = load_scraper_cache()
-    
+
     ids_to_resolve = []
     for item in vistos:
         item_id = item.get("id")
         if not item_id:
             continue
-        
+
         if not (item_id.startswith("tt") or item_id.startswith("tmdb:")):
             continue
-            
+
         cached_entry = scraper_cache.get(item_id)
         if cached_entry:
             cached_type = cached_entry.get("type")
             if cached_type and cached_type != content_type:
                 continue
-        
+
         ids_to_resolve.append(item_id)
-        # Buscar até 60 candidatos para termos margem de encontrar 20 do tipo solicitado
-        if len(ids_to_resolve) >= 60:
+        # Buscar até 80 candidatos para termos margem de encontrar 25 do tipo solicitado
+        if len(ids_to_resolve) >= 80:
             break
 
     if not ids_to_resolve:
@@ -522,13 +525,13 @@ async def get_populares_fenix_cached(content_type: str):
 
     resolved_metas = []
     cache_mudou = False
-    
+
     for r in results:
         if isinstance(r, dict):
             if r.get("type") == content_type:
                 meta_item = {k: v for k, v in r.items() if k != "_tmdb_id"}
                 resolved_metas.append(meta_item)
-            
+
             # Aproveitar para preencher no cache se não estiver lá
             item_id = r.get("id")
             if item_id and item_id not in scraper_cache:
@@ -545,7 +548,7 @@ async def get_populares_fenix_cached(content_type: str):
     if cache_mudou:
         await save_scraper_cache(scraper_cache)
 
-    resolved_metas = resolved_metas[:20]
+    resolved_metas = resolved_metas[:25]
 
     if resolved_metas:
         try:
@@ -558,23 +561,21 @@ async def get_populares_fenix_cached(content_type: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
-    manifest_data = {"name": "FENIXFLIX", "description": "Addon de Filmes e Séries", "types": ["movie", "series"]}
+    manifest_data = {"name": "FENIXFLIX", "description": "Addon de filmes e séries dublados e legendados em Português (PT‑BR)", "types": ["movie", "series"]}
     return templates.TemplateResponse(request=request, name="index.html", context={"manifest": manifest_data, "version": VERSION})
 
 @app.get("/manifest.json")
 async def manifest_endpoint():
     return JSONResponse(content={
         "id": "com.fenixflix", "version": VERSION, "name": "FENIXFLIX",
-        "description": "Addon de Filmes e Séries",
+        "description": "Addon de filmes e séries dublados e legendados em Português (PT‑BR)",
         "logo": "https://i.imgur.com/9SKgxfU.png",
         "background": "https://dl.strem.io/addon-background.jpg",
         "resources": ["stream", "catalog"],
         "types": ["movie", "series"],
         "catalogs": [
-            {"type": "movie",  "id": "popular",           "name": "Populares"},
             {"type": "movie",  "id": "populares_fenix",   "name": "Populares (Fenix)"},
             {"type": "movie",  "id": "recentes_servidor", "name": "Recém Adicionado (Fenix)"},
-            {"type": "series", "id": "popular",           "name": "Populares"},
             {"type": "series", "id": "populares_fenix",   "name": "Populares (Fenix)"},
             {"type": "series", "id": "recentes_servidor", "name": "Recém Adicionado (Fenix)"}
         ],
@@ -609,7 +610,7 @@ async def enviar_pedido_background(url: str):
         print(f"[AUTO-PEDIDO] Erro ao enviar pedido automático: {e}")
 
 async def atualizar_cache_e_pedido(
-    base_id, tmdb_id, titles, type, novos_flags, outras_tarefas, 
+    base_id, tmdb_id, titles, type, novos_flags, outras_tarefas,
     pending_names, mywallpaper_teve_resultados, season, episode,
     imdb_id_for_request, len_todos_streams
 ):
@@ -677,11 +678,11 @@ async def atualizar_cache_e_pedido(
             episode_suffix = ""
             if type == "series" and season is not None and episode is not None:
                 episode_suffix = f"&episode=T{season:02d}EP{episode:02d}"
-            
+
             base_server = SERVE_ or "https://fenixflix-2ymu.onrender.com"
             base_server = base_server.rstrip('/')
             pedidos_url = f"{base_server}/api/pedidos?id={imdb_id_for_request}&type={type}{episode_suffix}"
-            
+
             await enviar_pedido_background(pedidos_url)
     except Exception as e:
         print(f"[BACKGROUND TASK ERROR] Erro na atualização do cache ou pedido: {e}")

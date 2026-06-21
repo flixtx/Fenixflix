@@ -66,7 +66,11 @@ async def search_serve(tmdb_id: str, content_type: str, season=None, episode=Non
                 server_url = server.get("url")
                 server_label = server.get("label", "Desconhecido")
                 
-                if "dnxs70-server" in server_label.lower() or "xwpluss-server" in server_label.lower():
+                label_lower = server_label.lower() if server_label else ""
+                url_lower = server_url.lower() if server_url else ""
+                
+                blocked_terms = ["dnxs70", "xwpluss", "xwplus", "xwpus"]
+                if any(term in label_lower for term in blocked_terms) or any(term in url_lower for term in blocked_terms):
                     continue
                 
                 if not server_url:
