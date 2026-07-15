@@ -3,21 +3,28 @@ from bs4 import BeautifulSoup
 import re
 from urllib.parse import unquote
 import asyncio
+import time
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 
-# --- FUNÇÕES AJUDANTES (Rodarão em Threads separadas) ---
+cache_final_links = {}
+
+_RE_IFRAME_PLAYER = re.compile(
+    r'<iframe\s+[^>]*src=["\']([^"\']*player_2\.php[^"\']*)["\']', 
+    re.IGNORECASE
+)
+
 
 def parse_iframe(html_text):
     """Lê o HTML do site 1take e encontra o iframe do player."""
-    soup = BeautifulSoup(html_text, 'lxml')
-    iframe = soup.select_one("iframe[src*='player_2.php']")
-    if iframe:
-        url = iframe.get("src")
+    match = _RE_IFRAME_PLAYER.search(html_text)
+    if match:
+        url = match.group(1)
         if url.startswith("//"):
             return "https:" + url
         return url
     return None
+
 
 def parse_mediafire_btn(html_text):
     """Lê o HTML do Mediafire e encontra o botão final de download (MP4)."""
@@ -30,6 +37,46 @@ def parse_mediafire_btn(html_text):
 # --------------------------------------------------------
 
 async def extrair_link(label, cache_key, target_url, client, cached_mediafire_url=None, nome=None, tep=None, season=None):
+    now = time.time()
+    
+    # Limpeza de expirados e controle de tamanho da RAM (máx 1000 itens)
+    if len(cache_final_links) > 200:
+        expired_keys = [k for k, v in cache_final_links.items() if (now - v["time"]) >= 7200]
+        for ek in expired_keys:
+            cache_final_links.pop(ek, None)
+            
+    if len(cache_final_links) > 1000:
+        sorted_keys = sorted(cache_final_links.keys(), key=lambda k: cache_final_links[k]["time"])
+        for k_to_del in sorted_keys[:200]:
+            cache_final_links.pop(k_to_del, None)
+
+    ram_key = f"{cache_key}:{target_url}"
+    if ram_key in cache_final_links:
+        cached_entry = cache_final_links[ram_key]
+        if (now - cached_entry["time"]) < 7200: # 2 horas
+            print(f"[Azullog Debug] ⚡ Usando link MP4 direto em RAM para {label} ({cache_key})!")
+            partes = []
+            if nome:
+                partes.append(nome)
+            if tep:
+                partes.append(tep)
+            partes.append(f"{label}\nON")
+            desc = "\n".join(partes)
+
+            name_str = "ON"
+            if season is not None and str(season).strip():
+                name_str = f"ON - Temporada {season}"
+
+            return {
+                "name": "FenixFlix",
+                "description": desc,
+                "url": cached_entry["url"],
+                "behaviorHints": {"notWebReady": False, "bingeGroup": f"fenixflix-azullog-{label.lower()}"},
+                "_mediafire_url": cached_entry["mediafire_url"],
+                "_cache_key": cache_key,
+                "_label": label
+            }
+
     mediafire_url = cached_mediafire_url
 
     # 1. Se o cache disser "N", pula tudo!
@@ -80,12 +127,17 @@ async def extrair_link(label, cache_key, target_url, client, cached_mediafire_ur
         final_mp4 = await asyncio.to_thread(parse_mediafire_btn, mf_res.text)
 
         if final_mp4:
+            cache_final_links[ram_key] = {
+                "url": final_mp4,
+                "mediafire_url": mediafire_url,
+                "time": now
+            }
             partes = []
             if nome:
                 partes.append(nome)
             if tep:
                 partes.append(tep)
-            partes.append(f"{label}(ON)")
+            partes.append(f"{label}\nON")
             desc = "\n".join(partes)
 
             name_str = "ON"
