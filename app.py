@@ -1133,10 +1133,10 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
             redeflix_url = f"https://redeflixapi.store/serie/{tmdb_id}/{season}/{episode}"
             
         todos_streams.append({
-            "name": "RedeFlix\nVIP",
-            "title": f"{title_str}\nRedeFlix",
+            "name": "FenixFlix\nVIP",
+            "title": f"{title_str}\nFlix",
             "url": redeflix_url,
-            "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-redeflix"}
+            "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-flix"}
         })
 
     bad_original_urls = set()
