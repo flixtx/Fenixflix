@@ -26,6 +26,7 @@ import serve
 
 import on
 from nexembed import resolve_nexembed
+from redeflix import resolve_redeflix
 
 # Pré-calculados no startup para evitar reflexão a cada request
 _SERVE_HAS_TITLES = False
@@ -1031,6 +1032,16 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                 search_custom_api(imdb_id, titles, type, season, episode)
             )
 
+        # RedeFlix Integration
+        if tmdb_id:
+            if type == "movie":
+                redeflix_url = f"https://redeflixapi.store/filme/{tmdb_id}"
+            else:
+                redeflix_url = f"https://redeflixapi.store/serie/{tmdb_id}/{season}/{episode}"
+            outras_tarefas["redeflix"] = asyncio.create_task(
+                resolve_redeflix(url=redeflix_url, client=_http_client)
+            )
+
     tarefas_ativas = {}
     tarefas_ativas.update(outras_tarefas)
 
@@ -1092,6 +1103,22 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
             novos_flags["next"] = "N"
             continue
 
+        elif nome == "redeflix":
+            if res and isinstance(res, str) and res.startswith("http"):
+                title_name = titles[0] if titles else "Filme"
+                title_str = format_stream_title(title_name, type, season, episode, audio_info="Dublado")
+                s_info = {
+                    "name": "FenixFlix\nVIP",
+                    "title": f"{title_str}\nFlix",
+                    "url": res,
+                    "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-flix"}
+                }
+                todos_streams.append(s_info)
+                novos_flags["redeflix"] = "S"
+                continue
+            novos_flags["redeflix"] = "N"
+            continue
+
         else:
             novos_flags[nome] = "S"
 
@@ -1122,22 +1149,6 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
         imdb_id_for_request = clean_id
     else:
         imdb_id_for_request = clean_id
-
-    if tmdb_id:
-        title_name = titles[0] if titles else "Filme"
-        title_str = format_stream_title(title_name, type, season, episode, audio_info="Dublado")
-        
-        if type == "movie":
-            redeflix_url = f"https://redeflixapi.store/filme/{tmdb_id}"
-        else:
-            redeflix_url = f"https://redeflixapi.store/serie/{tmdb_id}/{season}/{episode}"
-            
-        todos_streams.append({
-            "name": "FenixFlix\nVIP",
-            "title": f"{title_str}\nFlix",
-            "url": redeflix_url,
-            "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-flix"}
-        })
 
     bad_original_urls = set()
     resolved_streams = []
