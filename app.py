@@ -4,7 +4,7 @@ import asyncio
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse
+from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -33,7 +33,7 @@ _ON_HAS_TITLES    = False
 
 load_dotenv()
 
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 CACHE_DIR = "cache"
 CATALOG_CACHE_TIME = 6 * 60 * 60
 POPULAR_CACHE_TIME = 24 * 60 * 60
@@ -612,12 +612,23 @@ async def root(request: Request):
     manifest_data = {"name": "FENIXFLIX", "description": "Addon de filmes, séries e Animes dublados e legendados em Português (PT‑BR)", "types": ["movie", "series"]}
     return templates.TemplateResponse(request=request, name="index.html", context={"manifest": manifest_data, "version": VERSION})
 
+@app.get("/logo.png")
+async def get_logo():
+    logo_path = os.path.join(BASE_DIR, "logo.png")
+    if os.path.exists(logo_path):
+        return FileResponse(logo_path, media_type="image/png")
+    return ORJSONResponse(content={"error": "Not found"}, status_code=404)
+
 @app.get("/manifest.json")
-async def manifest_endpoint():
+async def manifest_endpoint(request: Request):
+    # Dynamically gets the current host URL for the logo
+    base_url = str(request.base_url).rstrip("/")
+    logo_url = f"{base_url}/logo.png"
+
     return ORJSONResponse(content={
         "id": "com.fenixflix", "version": VERSION, "name": "FENIXFLIX",
         "description": "Addon de filmes, séries e Animes dublados e legendados em Português (PT‑BR)",
-        "logo": "https://i.imgur.com/e6skOZ8.png",
+        "logo": logo_url,
         "background": "https://dl.strem.io/addon-background.jpg",
         "resources": ["stream", "catalog"],
         "types": ["movie", "series"],
@@ -768,7 +779,7 @@ async def resolve_redirect(url: str, client: httpx.AsyncClient) -> str:
             return cached_url
     
     # Bypass para domínios rápidos e que não bloqueiam via Cloudflare
-    bypass_domains = ["koyeb.app", "localhost", "127.0.0.1", "fenixflix", "mediafire.com", "r2.dev", "google", "drive", "download.mediafire.com", ".mediafire.com"]
+    bypass_domains = ["koyeb.app", "localhost", "127.0.0.1", "fenixflix", "mediafire.com", "r2.dev", "google", "drive", "download.mediafire.com", ".mediafire.com", "redeflixapi.store"]
     if any(domain in url for domain in bypass_domains):
         return url
     
@@ -1111,6 +1122,22 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
         imdb_id_for_request = clean_id
     else:
         imdb_id_for_request = clean_id
+
+    if tmdb_id:
+        title_name = titles[0] if titles else "Filme"
+        title_str = format_stream_title(title_name, type, season, episode, audio_info="Dublado")
+        
+        if type == "movie":
+            redeflix_url = f"https://redeflixapi.store/filme/{tmdb_id}"
+        else:
+            redeflix_url = f"https://redeflixapi.store/serie/{tmdb_id}/{season}/{episode}"
+            
+        todos_streams.append({
+            "name": "RedeFlix\nVIP",
+            "title": f"{title_str}\nRedeFlix",
+            "url": redeflix_url,
+            "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-redeflix"}
+        })
 
     bad_original_urls = set()
     resolved_streams = []
