@@ -4,7 +4,7 @@ import asyncio
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse
+from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -26,6 +26,7 @@ import serve
 
 import on
 from nexembed import resolve_nexembed
+from redeflix import resolve_redeflix
 
 # Pré-calculados no startup para evitar reflexão a cada request
 _SERVE_HAS_TITLES = False
@@ -33,7 +34,7 @@ _ON_HAS_TITLES    = False
 
 load_dotenv()
 
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 CACHE_DIR = "cache"
 CATALOG_CACHE_TIME = 6 * 60 * 60
 POPULAR_CACHE_TIME = 24 * 60 * 60
@@ -612,12 +613,23 @@ async def root(request: Request):
     manifest_data = {"name": "FENIXFLIX", "description": "Addon de filmes, séries e Animes dublados e legendados em Português (PT‑BR)", "types": ["movie", "series"]}
     return templates.TemplateResponse(request=request, name="index.html", context={"manifest": manifest_data, "version": VERSION})
 
+@app.get("/logo.png")
+async def get_logo():
+    logo_path = os.path.join(BASE_DIR, "logo.png")
+    if os.path.exists(logo_path):
+        return FileResponse(logo_path, media_type="image/png")
+    return ORJSONResponse(content={"error": "Not found"}, status_code=404)
+
 @app.get("/manifest.json")
-async def manifest_endpoint():
+async def manifest_endpoint(request: Request):
+    # Dynamically gets the current host URL for the logo
+    base_url = str(request.base_url).rstrip("/")
+    logo_url = f"{base_url}/logo.png"
+
     return ORJSONResponse(content={
         "id": "com.fenixflix", "version": VERSION, "name": "FENIXFLIX",
         "description": "Addon de filmes, séries e Animes dublados e legendados em Português (PT‑BR)",
-        "logo": "https://i.imgur.com/e6skOZ8.png",
+        "logo": logo_url,
         "background": "https://dl.strem.io/addon-background.jpg",
         "resources": ["stream", "catalog"],
         "types": ["movie", "series"],
@@ -768,7 +780,7 @@ async def resolve_redirect(url: str, client: httpx.AsyncClient) -> str:
             return cached_url
     
     # Bypass para domínios rápidos e que não bloqueiam via Cloudflare
-    bypass_domains = ["koyeb.app", "localhost", "127.0.0.1", "fenixflix", "mediafire.com", "r2.dev", "google", "drive", "download.mediafire.com", ".mediafire.com"]
+    bypass_domains = ["koyeb.app", "localhost", "127.0.0.1", "fenixflix", "mediafire.com", "r2.dev", "google", "drive", "download.mediafire.com", ".mediafire.com", "redeflixapi.store"]
     if any(domain in url for domain in bypass_domains):
         return url
     
@@ -1020,6 +1032,16 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                 search_custom_api(imdb_id, titles, type, season, episode)
             )
 
+        # RedeFlix Integration
+        if tmdb_id:
+            if type == "movie":
+                redeflix_url = f"https://redeflixapi.store/filme/{tmdb_id}"
+            else:
+                redeflix_url = f"https://redeflixapi.store/serie/{tmdb_id}/{season}/{episode}"
+            outras_tarefas["redeflix"] = asyncio.create_task(
+                resolve_redeflix(url=redeflix_url, client=_http_client)
+            )
+
     tarefas_ativas = {}
     tarefas_ativas.update(outras_tarefas)
 
@@ -1079,6 +1101,22 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                     novos_flags["next"] = p_url
                     continue
             novos_flags["next"] = "N"
+            continue
+
+        elif nome == "redeflix":
+            if res and isinstance(res, str) and res.startswith("http"):
+                title_name = titles[0] if titles else "Filme"
+                title_str = format_stream_title(title_name, type, season, episode, audio_info="Dublado")
+                s_info = {
+                    "name": "FenixFlix\nVIP",
+                    "title": f"{title_str}\nFlix",
+                    "url": res,
+                    "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-flix"}
+                }
+                todos_streams.append(s_info)
+                novos_flags["redeflix"] = "S"
+                continue
+            novos_flags["redeflix"] = "N"
             continue
 
         else:
