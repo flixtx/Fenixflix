@@ -1,5 +1,4 @@
 import asyncio
-
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse, FileResponse
 from fastapi.templating import Jinja2Templates
@@ -20,9 +19,8 @@ from dotenv import load_dotenv
 
 from datetime import datetime, date
 import serve
-
 import on
-import go
+import go  # <-- ADICIONADO IMPORT DO GO
 from nexembed import resolve_nexembed
 from redeflix import resolve_redeflix
 from fshd import search_serve as search_fshd
@@ -30,6 +28,7 @@ from fshd import search_serve as search_fshd
 # Pré-calculados no startup para evitar reflexão a cada request
 _SERVE_HAS_TITLES = False
 _ON_HAS_TITLES    = False
+_GO_HAS_TITLES    = False  # <-- ADICIONADO
 
 load_dotenv()
 
@@ -183,13 +182,13 @@ async def prepopulate_scraper_cache_from_popular():
         except Exception as e:
             print(f"[SCRAPER-CACHE] Erro ao ler cache popular '{content_type}': {e}")
 
-
-
 import subprocess
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _http_client, _serve_client
+    global _SERVE_HAS_TITLES, _ON_HAS_TITLES, _GO_HAS_TITLES  # <-- ADICIONADO _GO_HAS_TITLES
+    
     _http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(15.0, connect=5.0),
         follow_redirects=True,
@@ -204,15 +203,14 @@ async def lifespan(app: FastAPI):
     )
 
     # Pré-calcula assinaturas de função (evita reflexão cara a cada request)
-    global _SERVE_HAS_TITLES, _ON_HAS_TITLES
     _SERVE_HAS_TITLES = "titles" in inspect.signature(serve.search_serve).parameters
     _ON_HAS_TITLES    = "titles" in inspect.signature(on.search_serve).parameters
+    _GO_HAS_TITLES    = "titles" in inspect.signature(go.search_serve).parameters  # <-- ADICIONADO
 
     # Inicia a task de gravação em background
     task_writer = asyncio.create_task(background_cache_writer())
 
     await prepopulate_scraper_cache_from_popular()
-
 
     yield
 
@@ -715,8 +713,6 @@ async def atualizar_cache_e_pedido(
             cache_status[base_id]["doramogo_slug"] = slug_novo
             cache_mudou = True
 
-
-
         if tmdb_id and type == "series":
             if episodes_backup is None:
                 episodes_backup = {}
@@ -761,7 +757,6 @@ async def atualizar_cache_e_pedido(
             await enviar_pedido_background(pedidos_url)
     except Exception as e:
         print(f"[BACKGROUND TASK ERROR] Erro na atualização do cache ou pedido: {e}")
-
 
 import time
 REDIRECT_CACHE = {}
@@ -993,10 +988,17 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                 on.search_serve(tmdb_id, type, season, episode, client=_http_client, cached_links=on_cache, **kwargs_on)
             )
 
-
-
-
-
+        # ==================== INTEGRAÇÃO GO ====================
+        go_flag = scraper_flags.get("go")
+        if go_flag == "N":
+            novos_flags["go"] = "N"
+        else:
+            # Para o go, passamos os títulos se disponíveis
+            kwargs_go = {"titles": titles} if _GO_HAS_TITLES else {}
+            outras_tarefas["go"] = asyncio.create_task(
+                go.search_serve(tmdb_id, type, season, episode, client=_http_client, **kwargs_go)
+            )
+        # =====================================================
 
         # Next Integration (NexEmbed)
         next_flag = scraper_flags.get("next")
@@ -1066,7 +1068,6 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
         for p in pending:
             p.cancel()
 
-
     for nome, tarefa in tarefas_ativas.items():
         if tarefa in pending:
             continue
@@ -1093,7 +1094,6 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                         on_dict[s["_cache_key"]] = match.group(1) if match else url_completa
 
             novos_flags[nome] = on_dict if on_dict else "S"
-
 
         elif nome == "next":
             if res and isinstance(res, tuple) and len(res) == 2:
@@ -1128,6 +1128,20 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                 continue
             novos_flags["redeflix"] = "N"
             continue
+
+        # ==================== PROCESSAMENTO GO ====================
+        elif nome == "go":
+            if res and isinstance(res, list):
+                for s_info in res:
+                    if isinstance(s_info, dict) and s_info.get("url"):
+                        if "behaviorHints" not in s_info:
+                            s_info["behaviorHints"] = {"notWebReady": False, "bingeGroup": "fenixflix-go"}
+                        todos_streams.append(s_info)
+                novos_flags["go"] = "S" if res else "N"
+            else:
+                novos_flags["go"] = "N"
+            continue
+        # ========================================================
 
         else:
             novos_flags[nome] = "S"
@@ -1234,7 +1248,6 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
         novos_flags=novos_flags,
         outras_tarefas=list(outras_tarefas.keys()),
         pending_names=pending_names,
-
         season=season,
         episode=episode,
         imdb_id_for_request=imdb_id_for_request,
