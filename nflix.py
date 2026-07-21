@@ -64,7 +64,7 @@ def js_unpack(source):
 
 async def search_noveflix_async(client, site_type, query):
     """Pesquisa filmes ou séries no Noveflix de forma assíncrona."""
-    domain = "noveflixgo.com" if site_type == "tv" else "noveflixgo.com"
+    domain = "noveflixgo.com" if site_type == "tv" else "noveflixfilmes.com"
     search_url = f"https://{domain}/?s={urllib.parse.quote(query)}"
 
     print(f"[NFlix] Buscando '{query}' em {domain}...")
@@ -342,7 +342,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                 if mp4:
                     streams.append({
                         "name": "FenixFlix\nNFlix",
-                        "title": f"{search_titles[0]}\nTV",
+                        "title": f"{search_titles[0]}\nNFlix",
                         "url": mp4,
                         "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                     })
@@ -376,7 +376,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                     if mp4:
                         streams.append({
                             "name": "FenixFlix\nNFlix",
-                            "title": f"{search_titles[0]}\nTV",
+                            "title": f"{search_titles[0]}\nNFlix",
                             "url": mp4,
                             "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                         })
@@ -472,7 +472,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                     updated = True
                     streams.append({
                         "name": "FenixFlix\nNFlix",
-                        "title": f"{search_titles[0]}\nTV",
+                        "title": f"{search_titles[0]}\nNFlix",
                         "url": mp4,
                         "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                     })
@@ -573,7 +573,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                         updated = True
                         streams.append({
                             "name": "FenixFlix\nNFlix",
-                            "title": f"{search_titles[0]}\nTV",
+                            "title": f"{search_titles[0]}\nNFlix",
                             "url": mp4,
                             "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                         })
