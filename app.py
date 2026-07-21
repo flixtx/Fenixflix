@@ -20,7 +20,8 @@ from dotenv import load_dotenv
 from datetime import datetime, date
 import serve
 import on
-import go  # <-- ADICIONADO IMPORT DO GO
+import go
+import nflix  # <-- ADICIONADO
 from nexembed import resolve_nexembed
 from redeflix import resolve_redeflix
 from fshd import search_serve as search_fshd
@@ -28,7 +29,8 @@ from fshd import search_serve as search_fshd
 # Pré-calculados no startup para evitar reflexão a cada request
 _SERVE_HAS_TITLES = False
 _ON_HAS_TITLES    = False
-_GO_HAS_TITLES    = False  # <-- ADICIONADO
+_GO_HAS_TITLES    = False
+_NFLIX_HAS_TITLES = False  # <-- ADICIONADO
 
 load_dotenv()
 
@@ -187,7 +189,7 @@ import subprocess
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _http_client, _serve_client
-    global _SERVE_HAS_TITLES, _ON_HAS_TITLES, _GO_HAS_TITLES  # <-- ADICIONADO _GO_HAS_TITLES
+    global _SERVE_HAS_TITLES, _ON_HAS_TITLES, _GO_HAS_TITLES, _NFLIX_HAS_TITLES  # <-- ADICIONADO _NFLIX_HAS_TITLES
     
     _http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(15.0, connect=5.0),
@@ -205,7 +207,8 @@ async def lifespan(app: FastAPI):
     # Pré-calcula assinaturas de função (evita reflexão cara a cada request)
     _SERVE_HAS_TITLES = "titles" in inspect.signature(serve.search_serve).parameters
     _ON_HAS_TITLES    = "titles" in inspect.signature(on.search_serve).parameters
-    _GO_HAS_TITLES    = "titles" in inspect.signature(go.search_serve).parameters  # <-- ADICIONADO
+    _GO_HAS_TITLES    = "titles" in inspect.signature(go.search_serve).parameters
+    _NFLIX_HAS_TITLES = "titles" in inspect.signature(nflix.search_serve).parameters  # <-- ADICIONADO
 
     # Inicia a task de gravação em background
     task_writer = asyncio.create_task(background_cache_writer())
@@ -713,6 +716,8 @@ async def atualizar_cache_e_pedido(
             cache_status[base_id]["doramogo_slug"] = slug_novo
             cache_mudou = True
 
+
+
         if tmdb_id and type == "series":
             if episodes_backup is None:
                 episodes_backup = {}
@@ -1000,6 +1005,18 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
             )
         # =====================================================
 
+        # ==================== INTEGRAÇÃO NFLIX ====================
+        nflix_flag = scraper_flags.get("nflix")
+        if nflix_flag == "N":
+            novos_flags["nflix"] = "N"
+        else:
+            # NFlix precisa dos títulos
+            kwargs_nflix = {"titles": titles} if _NFLIX_HAS_TITLES else {}
+            outras_tarefas["nflix"] = asyncio.create_task(
+                nflix.search_serve(tmdb_id, type, season, episode, client=_http_client, **kwargs_nflix)
+            )
+        # ========================================================
+
         # Next Integration (NexEmbed)
         next_flag = scraper_flags.get("next")
         if next_flag and isinstance(next_flag, str) and next_flag.startswith("http"):
@@ -1142,6 +1159,20 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                 novos_flags["go"] = "N"
             continue
         # ========================================================
+
+        # ==================== PROCESSAMENTO NFLIX ====================
+        elif nome == "nflix":
+            if res and isinstance(res, list):
+                for s_info in res:
+                    if isinstance(s_info, dict) and s_info.get("url"):
+                        if "behaviorHints" not in s_info:
+                            s_info["behaviorHints"] = {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
+                        todos_streams.append(s_info)
+                novos_flags["nflix"] = "S" if res else "N"
+            else:
+                novos_flags["nflix"] = "N"
+            continue
+        # ============================================================
 
         else:
             novos_flags[nome] = "S"
