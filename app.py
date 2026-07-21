@@ -1,7 +1,4 @@
-import uvloop
 import asyncio
-
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import ORJSONResponse, JSONResponse, HTMLResponse, FileResponse
@@ -27,6 +24,7 @@ import serve
 import on
 from nexembed import resolve_nexembed
 from redeflix import resolve_redeflix
+from fshd import search_serve as search_fshd
 
 # Pré-calculados no startup para evitar reflexão a cada request
 _SERVE_HAS_TITLES = False
@@ -1040,6 +1038,17 @@ async def stream(type: str, id: str, request: Request, background_tasks: Backgro
                 redeflix_url = f"https://redeflixapi.store/serie/{tmdb_id}/{season}/{episode}"
             outras_tarefas["redeflix"] = asyncio.create_task(
                 resolve_redeflix(url=redeflix_url, client=_http_client)
+            )
+
+        # FSHD Integration (somente séries)
+        fshd_flag = scraper_flags.get("fshd")
+        if type != "series":
+            pass  # fshd só serve séries, não cria task pra filmes
+        elif fshd_flag == "N":
+            novos_flags["fshd"] = "N"
+        else:
+            outras_tarefas["fshd"] = asyncio.create_task(
+                search_fshd(tmdb_id, type, season, episode, client=_http_client)
             )
 
     tarefas_ativas = {}
