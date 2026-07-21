@@ -9,6 +9,17 @@ import hashlib
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
 
+# Importar manualmente a biblioteca Crypto.Util.Padding se não estiver disponível
+try:
+    from Crypto.Util.Padding import unpad
+except ImportError:
+    # Fallback para uma implementação simples de unpad se a biblioteca não estiver presente
+    def unpad(data, block_size):
+        padding_len = data[-1]
+        if padding_len < 1 or padding_len > block_size:
+            raise ValueError("Padding is incorrect.")
+        return data[:-padding_len]
+
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -28,8 +39,12 @@ def descriptografar_link(encrypted_str, password):
         salt = bytes.fromhex(obj['s'])
         ct = base64.b64decode(obj['ct'])
         iv = bytes.fromhex(obj['iv'])
+        
+        # A senha deve ser bytes para hashlib.md5
         key, _ = evp_kdf(password.encode('utf-8'), salt, 32, 16)
         cipher = AES.new(key, AES.MODE_CBC, iv)
+        
+        # Certificar-se de que unpad usa AES.block_size
         decrypted = unpad(cipher.decrypt(ct), AES.block_size)
         return decrypted.decode('utf-8').replace('"', '')
     except Exception as e:
@@ -38,15 +53,26 @@ def descriptografar_link(encrypted_str, password):
 
 def decodificar_ck(ck_raw):
     try:
+        # Tenta extrair hexadecimais
         hexvals = re.findall(r'\\x([0-9a-fA-F]{2})', ck_raw)
         if hexvals:
-            b64_str = bytes.fromhex(''.join(hexvals)).decode('utf-8')
+            b64_str_encoded = bytes.fromhex(''.join(hexvals))
             try:
-                return base64.b64decode(b64_str + '==').decode('utf-8')
+                # Tenta decodificar como UTF-8 primeiro
+                b64_str = b64_str_encoded.decode('utf-8')
+            except UnicodeDecodeError:
+                # Se falhar, usa a string bruta
+                b64_str = b64_str_encoded.decode('latin-1') # Ou outra codificação adequada
+            
+            # Tenta decodificar base64 sem padding extra primeiro
+            try:
+                return base64.b64decode(b64_str).decode('utf-8')
             except Exception:
-                return b64_str
+                # Se falhar, tenta com padding
+                return base64.b64decode(b64_str + '==').decode('utf-8')
         return ck_raw
-    except:
+    except Exception as e:
+        print(f"[Go Debug] Erro ao decodificar ck: {e}")
         return ck_raw
 
 async def resolver_master_txt(client, master_url, referer):
@@ -56,19 +82,28 @@ async def resolver_master_txt(client, master_url, referer):
         conteudo = res.text.strip()
         base = master_url.rsplit('/master.txt', 1)[0]
 
-        b64s = re.findall(r'([a-zA-Z0-9+/]{30,}={0,2})', conteudo)
-        for b64 in reversed(b64s):
+        # Regex mais específica para URLs base64, que geralmente terminam com = ou ==
+        b64s = re.findall(r'https?://[a-zA-Z0-9./\-]+(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?', conteudo)
+        for b64_url in reversed(b64s):
             try:
-                caminho = base64.b64decode(b64 + '==').decode('utf-8').strip()
+                # Tenta decodificar a parte base64 da URL se houver
+                # Isso é uma heurística, pode precisar de ajuste dependendo do formato exato
+                if 'base64,' in b64_url:
+                    path_b64 = b64_url.split('base64,')[1]
+                    caminho = base64.b64decode(path_b64 + '==').decode('utf-8').strip()
+                else:
+                    caminho = b64_url # Se não for base64, assume que é a URL completa
+
                 if caminho.endswith('.m3u8') or '/hls/' in caminho:
-                    return caminho if caminho.startswith('http') else base + '/' + caminho.lstrip('/')
-            except:
+                    return caminho if caminho.startswith('http') else urljoin(base + '/', caminho)
+            except Exception as e:
+                print(f"[Go Debug] Erro ao decodificar b64_url em master.txt: {e}")
                 continue
 
         for linha in conteudo.splitlines():
             linha = linha.strip()
             if linha.endswith('.m3u8') or '/hls/' in linha:
-                return linha if linha.startswith('http') else base + '/' + linha.lstrip('/')
+                return linha if linha.startswith('http') else urljoin(base + '/', linha)
     except Exception as e:
         print(f"[Go Debug] Erro ao resolver master.txt: {e}")
     return None
@@ -86,7 +121,7 @@ async def extrair_embedplayer1(client, url_video):
         dados = response.json()
 
         secured = dados.get('securedLink', '')
-        if secured and '.m3u8' in secured:
+        if secured and ('.m3u8' in secured or '/hls/' in secured):
             return secured
 
         video_source = dados.get('videoSource', '')
@@ -106,6 +141,7 @@ async def extrair_embedplayer1(client, url_video):
                 if '{"ct":' in raw_file:
                     dec = descriptografar_link(raw_file, chave_ck)
                     if dec:
+                        # Usar urljoin para garantir URLs absolutas corretas
                         if dec.startswith('http'): return dec
                         if '/m3/' in dec or '/hls/' in dec: return urljoin('https://embedplayer1.xyz', dec)
                 elif raw_file.startswith('http'): return raw_file
@@ -121,17 +157,21 @@ async def resolve_stream_async(client, player_url):
         r = await client.get(player_url)
         html = r.text
 
-        m_match = re.search(r"const\s+videoSrc\s*=\s*['\"]([^'\"]+)['\"]", html)
+        # Tenta encontrar videoSrc ou master.txt na página principal
+        m_match = re.search(r'const\s+videoSrc\s*=\s*["\']([^"\']*?(?:m3u8|master\.txt)[^"\']*)["\']', html) # Mais específico para m3u8 ou master.txt
         if not m_match:
-            m_match = re.search(r'(https?://[^"\'\s]+/master\.txt[^"\'\s]*)', html)
+            m_match = re.search(r'(https?://[^"\s]+/master\.txt[^"\s]*)', html)
 
         if m_match:
             m_url    = m_match.group(1).split('#')[0]
-            referer  = 'https://watch.brstream.cc/' if 'brstream' in m_url else 'https://gofilmeshd.top/'
-            url_real = await resolver_master_txt(client, m_url, referer)
-            return url_real or m_url, {'Referer': referer, 'Origin': referer.rstrip('/')}
+            # Determinar o referer com base na URL do master.txt
+            parsed_m_url = urlparse(m_url)
+            referer_base = f"{parsed_m_url.scheme}://{parsed_m_url.netloc}/"
+            
+            url_real = await resolver_master_txt(client, m_url, referer_base)
+            return url_real or m_url, {'Referer': referer_base, 'Origin': referer_base.rstrip('/')}
 
-        mf_match = re.search(r'(https?://[^\s"\']+mediafire\.com[^\s"\']*)', html)
+        mf_match = re.search(r'(https?://[^\s"\\]+mediafire\.com[^\s"\\]*)', html)
         if mf_match:
             print(f"[Go Debug] Mediafire encontrado na página principal.")
             return mf_match.group(1), {'Referer': player_url}
@@ -143,41 +183,41 @@ async def resolve_stream_async(client, player_url):
         if src:
             if src.startswith('//'):
                 src = 'https:' + src
+            
+            # Normaliza o src para garantir que é uma URL absoluta
+            src_absolute = urljoin(player_url, src)
 
-            if 'embedplayer1.xyz' in src:
-                link = await extrair_embedplayer1(client, src)
+            if 'embedplayer1.xyz' in src_absolute:
+                link = await extrair_embedplayer1(client, src_absolute)
                 if link:
                     return link, {'Referer': 'https://embedplayer1.xyz/', 'Origin': 'https://embedplayer1.xyz'}
 
-            elif '112234152.xyz' in src:
-                vid        = src.split('?data=')[-1].split('&')[0]
+            elif '112234152.xyz' in src_absolute:
+                vid        = src_absolute.split('?data=')[-1].split('&')[0]
                 master_url = f'https://112234152.xyz/hls/{vid}/master.txt'
                 referer    = 'https://112234152.xyz/'
                 url_real   = await resolver_master_txt(client, master_url, referer)
                 return url_real or f'https://112234152.xyz/hls/{vid}/index.m3u8', {'Referer': referer}
 
-            elif 'mediafire.com' in src:
-                return src, {'Referer': player_url}
+            elif 'mediafire.com' in src_absolute:
+                return src_absolute, {'Referer': player_url}
 
             else:
-                res_iframe = await client.get(src, headers={'Referer': player_url})
+                # Se o iframe não for um dos conhecidos, tenta buscar o conteúdo do iframe
+                res_iframe = await client.get(src_absolute, headers={'Referer': player_url})
 
-                m_match = re.search(r"const\s+videoSrc\s*=\s*['\"]([^'\"]+)['\"]", res_iframe.text)
+                m_match = re.search(r'const\s+videoSrc\s*=\s*["\']([^"\']*?(?:m3u8|master\.txt)[^"\']*)["\']', res_iframe.text) # Mais específico para m3u8 ou master.txt
+                if not m_match:
+                    m_match = re.search(r'(https?://[^"\s]+/master\.txt[^"\s]*)', res_iframe.text)
+
                 if m_match:
                     stream_url = m_match.group(1)
-                    origin     = f"https://{urlparse(src).netloc}"
+                    origin     = f"https://{urlparse(src_absolute).netloc}"
                     return stream_url, {'Origin': origin, 'Referer': origin + '/'}
 
-                m_match = re.search(r'(https?://[^"\'\s]+/master\.txt[^"\'\s]*)', res_iframe.text)
-                if m_match:
-                    m_url    = m_match.group(1).split('#')[0]
-                    referer  = f"https://{urlparse(src).netloc}/"
-                    url_real = await resolver_master_txt(client, m_url, referer)
-                    return url_real or m_url, {'Referer': referer, 'Origin': referer.rstrip('/')}
-
-                mf_match = re.search(r'(https?://[^\s"\']+mediafire\.com[^\s"\']*)', res_iframe.text)
+                mf_match = re.search(r'(https?://[^\s"\\]+mediafire\.com[^\s"\\]*)', res_iframe.text)
                 if mf_match:
-                    return mf_match.group(1), {'Referer': src}
+                    return mf_match.group(1), {'Referer': src_absolute}
 
     except Exception as e:
         print(f"[Go Debug] Erro no resolve_stream_async: {e}")
@@ -194,13 +234,14 @@ def gerar_slugs(title):
     sem_artigos = re.sub(r'\b(o|a|os|as|the|de|da|do|dos|das|em|por|para)\b', '', limpo, flags=re.IGNORECASE)
     sem_artigos = re.sub(r'\s+', ' ', sem_artigos).strip()
     slug_sem_artigos = re.sub(r'-+', '-', sem_artigos.replace(' ', '-')).lower()
-    if slug_sem_artigos != slug_principal:
+    if slug_sem_artigos and slug_sem_artigos != slug_principal:
         slugs.append(slug_sem_artigos)
 
     palavras = limpo.split()
     if len(palavras) > 3:
         slug_curto = '-'.join(palavras[:3]).lower()
-        slugs.append(slug_curto)
+        if slug_curto and slug_curto not in slugs:
+            slugs.append(slug_curto)
 
     return slugs
 
@@ -210,23 +251,21 @@ def extrair_opcoes(html, content_type, season, episode):
     base_url = 'https://gofilmeshd.top'
 
     if content_type == 'series' and season and episode:
-        buttons = soup.select('div.temps button.accordion')
-        panels = soup.select('div.temps div.panel')
+        # A nova estrutura usa botões para temporadas e divs para episódios
+        season_buttons = soup.select('button')
         target_panel = None
 
-        for i, btn in enumerate(buttons):
+        for btn in season_buttons:
             btn_text = btn.get_text(strip=True)
             match = re.search(r'(\d+)º?\s*[Tt]emporada', btn_text, re.IGNORECASE)
             if match and int(match.group(1)) == int(season):
-                if i < len(panels):
-                    target_panel = panels[i]
+                # O painel de episódios é o div irmão seguinte ao botão da temporada
+                target_panel = btn.find_next_sibling('div')
                 break
-
-        if not target_panel and len(panels) >= int(season):
-            target_panel = panels[int(season) - 1]
-
+        
         if target_panel:
-            links = target_panel.select('div.ep a[href]')
+            # Episódios estão dentro de <a> tags diretamente no div do painel
+            links = target_panel.select('a[href]')
             ep_idx = int(episode) - 1
             if 0 <= ep_idx < len(links):
                 opts.append({
@@ -234,6 +273,7 @@ def extrair_opcoes(html, content_type, season, episode):
                     'url': urljoin(base_url, links[ep_idx].get('href'))
                 })
     else:
+        # Para filmes, a lógica original de 'div.link a[href]' parece estar correta
         links = soup.select('div.link a[href]')
         for l in links:
             opts.append({
@@ -253,6 +293,8 @@ async def tentar_slug(client, slug, content_type, season, episode):
         if res.status_code == 200:
             print(f"[Go Debug] Sucesso! Página encontrada para '{slug}'")
             return extrair_opcoes(res.text, content_type, season, episode)
+    except httpx.HTTPStatusError as e:
+        print(f"[Go Debug] Erro HTTP ao buscar slug '{slug}': {e.response.status_code}")
     except Exception as e:
         print(f"[Go Debug] Erro ao buscar slug '{slug}': {e}")
     return None
@@ -263,7 +305,12 @@ async def search_gofilmes(client, titles, content_type, season=None, episode=Non
         slugs_para_tentar.extend(gerar_slugs(title))
 
     vistos = set()
-    slugs_unicos = [s for s in slugs_para_tentar if not (s in vistos or vistos.add(s))]
+    # Garante slugs únicos e mantém a ordem de geração
+    slugs_unicos = []
+    for s in slugs_para_tentar:
+        if s not in vistos:
+            slugs_unicos.append(s)
+            vistos.add(s)
 
     print(f"[Go Debug] Total de variações de nomes a testar em paralelo: {len(slugs_unicos)}")
 
@@ -284,8 +331,11 @@ async def search_gofilmes(client, titles, content_type, season=None, episode=Non
                     if not t.done():
                         t.cancel()
                 return opcoes
-        except Exception as e:
+        except asyncio.CancelledError:
+            # Ignorar tarefas canceladas
             pass
+        except Exception as e:
+            print(f"[Go Debug] Erro durante a resolução de slug: {e}")
             
     return []
 
@@ -307,6 +357,8 @@ async def search_serve(titles, content_type, season=None, episode=None):
 
         print(f"[Go Debug] Encontradas {len(options)} opções de players. Resolvendo...")
 
+        # Limitar o número de streams a resolver para evitar sobrecarga e focar nos mais relevantes
+        # Apenas as duas primeiras opções são resolvidas, como no código original
         tasks = [resolve_stream_async(client, opt['url']) for opt in options[:2]]
         resolved_streams = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -314,8 +366,14 @@ async def search_serve(titles, content_type, season=None, episode=None):
             if isinstance(res, Exception):
                 print(f"[Go Debug] Exceção durante a resolução de stream: {res}")
                 continue
-
-            url, head = res
+            
+            # Certifica-se de que res é uma tupla (url, headers)
+            if isinstance(res, tuple) and len(res) == 2:
+                url, head = res
+            else:
+                # Se res não for uma tupla esperada, pode ser um caso de erro não capturado
+                print(f"[Go Debug] Resultado inesperado da resolução de stream: {res}")
+                continue
 
             if url and ('master.txt' in url or '.m3u8' in url or 'mediafire' in url or '.mp4' in url):
                 print(f"[Go Debug] Stream extraído com sucesso: {url[:60]}...")
@@ -329,3 +387,28 @@ async def search_serve(titles, content_type, season=None, episode=None):
                 results.append(entry)
 
     return results
+
+# Exemplo de uso (para testes)
+async def main():
+    # Teste para série
+    titles = ["Silo"]
+    content_type = "series"
+    season = "1"
+    episode = "1"
+
+    # Teste para filme
+    # titles = ["Devoradores de Estrelas"]
+    # content_type = "movie"
+    # season = None
+    # episode = None
+
+    streams = await search_serve(titles, content_type, season, episode)
+    if streams:
+        print("Streams encontrados:")
+        for stream in streams:
+            print(json.dumps(stream, indent=2))
+    else:
+        print("Nenhum stream encontrado.")
+
+if __name__ == '__main__':
+    asyncio.run(main())
