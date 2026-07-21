@@ -22,6 +22,7 @@ from datetime import datetime, date
 import serve
 
 import on
+import go
 from nexembed import resolve_nexembed
 from redeflix import resolve_redeflix
 from fshd import search_serve as search_fshd
