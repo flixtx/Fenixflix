@@ -342,7 +342,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                 if mp4:
                     streams.append({
                         "name": "FenixFlix\nNFlix",
-                        "title": f"{search_titles[0]}\nNFlix",
+                        "title": f"{search_titles[0]}\nTV",
                         "url": mp4,
                         "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                     })
@@ -376,7 +376,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                     if mp4:
                         streams.append({
                             "name": "FenixFlix\nNFlix",
-                            "title": f"{search_titles[0]}\nNFlix",
+                            "title": f"{search_titles[0]}\nTV",
                             "url": mp4,
                             "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                         })
@@ -472,7 +472,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                     updated = True
                     streams.append({
                         "name": "FenixFlix\nNFlix",
-                        "title": f"{search_titles[0]}\nNFlix",
+                        "title": f"{search_titles[0]}\nTV",
                         "url": mp4,
                         "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                     })
@@ -573,7 +573,7 @@ async def search_serve(tmdb_id, content_type, season=None, episode=None, client=
                         updated = True
                         streams.append({
                             "name": "FenixFlix\nNFlix",
-                            "title": f"{search_titles[0]}\nNFlix",
+                            "title": f"{search_titles[0]}\nTV",
                             "url": mp4,
                             "behaviorHints": {"notWebReady": False, "bingeGroup": "fenixflix-nflix"}
                         })
